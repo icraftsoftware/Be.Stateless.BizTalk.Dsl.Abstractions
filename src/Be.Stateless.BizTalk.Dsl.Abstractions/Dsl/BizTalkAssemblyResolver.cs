@@ -1,6 +1,6 @@
 ﻿#region Copyright & License
 
-// Copyright © 2012 - 2020 François Chabot
+// Copyright © 2012 - 2021 François Chabot
 // 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -38,12 +38,12 @@ namespace Be.Stateless.BizTalk.Dsl
 			{
 				if (btsKey == null)
 				{
-					DefaultProbingPaths = Array.Empty<string>();
+					SystemProbingFolderPaths = Array.Empty<string>();
 				}
 				else
 				{
 					var installPath = (string) btsKey.GetValue("InstallPath");
-					DefaultProbingPaths = new[] {
+					SystemProbingFolderPaths = new[] {
 						installPath,
 						Path.Combine(installPath, @"Developer Tools"),
 						Path.Combine(installPath, @"SDK\Utilities\PipelineTools")
@@ -53,51 +53,59 @@ namespace Be.Stateless.BizTalk.Dsl
 			Instance = new BizTalkAssemblyResolver();
 		}
 
-		private static string[] DefaultProbingPaths { get; }
-
 		internal static BizTalkAssemblyResolver Instance { get; }
 
+		private static string[] SystemProbingFolderPaths { get; }
+
 		[SuppressMessage("ReSharper", "UnusedMember.Global")]
-		public static void Register(Action<string> logAppender, params string[] probingPaths)
+		public static void Register(Action<string> logAppender, params string[] probingFolderPaths)
 		{
 			Instance._logAppender = logAppender;
-			if (!DefaultProbingPaths.Any()) logAppender?.Invoke("Default probing paths to BizTalk Developer Tools and Pipeline Tools could not be found.");
-			AddProbingPaths(probingPaths ?? Array.Empty<string>());
+			if (!SystemProbingFolderPaths.Any()) logAppender?.Invoke("System probing folder paths to BizTalk Developer Tools and Pipeline Tools could not be found.");
+			AddProbingFolderPaths(probingFolderPaths ?? Array.Empty<string>());
 			AppDomain.CurrentDomain.AssemblyResolve += Instance.OnAssemblyResolve;
 		}
 
 		[SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
-		public static void AddProbingPaths(params string[] probingPaths)
+		public static void AddProbingFolderPaths(params string[] probingFolderPaths)
 		{
-			Instance.PrivateProbingPaths = probingPaths == null
-				? Enumerable.Empty<string>()
-				: probingPaths.Where(p => !string.IsNullOrWhiteSpace(p)).SelectMany(jp => jp.Split(';').Where(p => !string.IsNullOrWhiteSpace(p)));
+			Instance.UserProbingFolderPaths = probingFolderPaths?.Where(p => !string.IsNullOrWhiteSpace(p))
+					.SelectMany(jp => jp.Split(';').Where(p => !string.IsNullOrWhiteSpace(p)))
+					.Distinct()
+					.ToArray()
+				?? Enumerable.Empty<string>();
 		}
 
 		[SuppressMessage("ReSharper", "UnusedMember.Global")]
 		public static void Unregister()
 		{
 			AppDomain.CurrentDomain.AssemblyResolve -= Instance.OnAssemblyResolve;
+			Instance._logAppender = null;
 		}
 
 		private BizTalkAssemblyResolver() { }
 
-		internal IEnumerable<string> PrivateProbingPaths { get; private set; }
+		internal IEnumerable<string> UserProbingFolderPaths { get; private set; }
 
 		private Assembly OnAssemblyResolve(object sender, ResolveEventArgs args)
 		{
 			// nonexistent resource assemblies
-			if (args.Name.StartsWith("Microsoft.BizTalk.ExplorerOM.resources, Version=3.0.", StringComparison.OrdinalIgnoreCase)) return null;
-			if (args.Name.StartsWith("Microsoft.BizTalk.Pipeline.Components.resources, Version=3.0.", StringComparison.OrdinalIgnoreCase)) return null;
-			if (args.Name.StartsWith("Microsoft.ServiceModel.Channels.resources, Version=3.0.", StringComparison.OrdinalIgnoreCase)) return null;
+			if (args.Name.StartsWith("Microsoft.BizTalk.ExplorerOM.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
+			if (args.Name.StartsWith("Microsoft.BizTalk.Pipeline.Components.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
+			if (args.Name.StartsWith("Microsoft.ServiceModel.Channels.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
 
 			// nonexistent xml serializers
 			if (Regex.IsMatch(args.Name, @"(Microsoft|Be\.Stateless)\..+\.XmlSerializers, Version=")) return null;
 
 			var assemblyName = new AssemblyName(args.Name);
 
-			var resolutionPath = DefaultProbingPaths.Concat(PrivateProbingPaths)
-				.Select(path => Path.Combine(path, assemblyName.Name + ".dll"))
+			var resolutionPath = SystemProbingFolderPaths.Concat(UserProbingFolderPaths)
+				.Select(
+					path => {
+						var probedPath = Path.Combine(path, assemblyName.Name + ".dll");
+						_logAppender?.Invoke($"   Probing '{probedPath}'.");
+						return probedPath;
+					})
 				.FirstOrDefault(File.Exists);
 			if (resolutionPath != null)
 			{

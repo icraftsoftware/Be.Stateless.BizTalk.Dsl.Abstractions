@@ -1,6 +1,6 @@
 ﻿#region Copyright & License
 
-// Copyright © 2012 - 2020 François Chabot
+// Copyright © 2012 - 2021 François Chabot
 // 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,51 +28,51 @@ namespace Be.Stateless.BizTalk.Dsl
 		[Fact]
 		public void RefineEmptyProbingPath()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(string.Empty);
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEmpty();
+			BizTalkAssemblyResolver.AddProbingFolderPaths(string.Empty);
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().NotBeNull().And.BeEmpty();
 		}
 
 		[Fact]
 		public void RefineEmptyProbingPathArray()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(string.Empty);
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEmpty();
+			BizTalkAssemblyResolver.AddProbingFolderPaths(string.Empty);
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().NotBeNull().And.BeEmpty();
 		}
 
 		[Fact]
 		public void RefineJoinedProbingPaths()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(@"c:\folder\one;c:\folder\two", @"c:\folder\six; ;;c:\folder\ten;");
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEquivalentTo(@"c:\folder\one", @"c:\folder\two", @"c:\folder\six", @"c:\folder\ten");
+			BizTalkAssemblyResolver.AddProbingFolderPaths(@"c:\folder\one;c:\folder\two", @"c:\folder\six; ;;c:\folder\ten;c:\folder\two;");
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().BeEquivalentTo(@"c:\folder\one", @"c:\folder\two", @"c:\folder\six", @"c:\folder\ten");
 		}
 
 		[Fact]
 		public void RefineNullProbingPath()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(null);
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEmpty();
+			BizTalkAssemblyResolver.AddProbingFolderPaths(null);
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().NotBeNull().And.BeEmpty();
 		}
 
 		[Fact]
 		public void RefineNullProbingPathArray()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(new string[] { null });
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEmpty();
+			BizTalkAssemblyResolver.AddProbingFolderPaths(new string[] { null });
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().NotBeNull().And.BeEmpty();
 		}
 
 		[Fact]
 		public void RefineProbingPath()
 		{
-			BizTalkAssemblyResolver.AddProbingPaths(@"c:\folder\one");
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEquivalentTo(@"c:\folder\one");
+			BizTalkAssemblyResolver.AddProbingFolderPaths(@"c:\folder\one");
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().BeEquivalentTo(@"c:\folder\one");
 		}
 
 		[Fact]
 		public void RefineProbingPathArray()
 		{
 			var probingPaths = new[] { @"c:\folder\one\file.dll", @"c:\folder\two\file.dll" }.Select(Path.GetDirectoryName).ToArray();
-			BizTalkAssemblyResolver.AddProbingPaths(probingPaths);
-			BizTalkAssemblyResolver.Instance.PrivateProbingPaths.Should().BeEquivalentTo(@"c:\folder\one", @"c:\folder\two");
+			BizTalkAssemblyResolver.AddProbingFolderPaths(probingPaths);
+			BizTalkAssemblyResolver.Instance.UserProbingFolderPaths.Should().BeEquivalentTo(@"c:\folder\one", @"c:\folder\two");
 		}
 	}
 }

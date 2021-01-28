@@ -89,33 +89,49 @@ namespace Be.Stateless.BizTalk.Dsl
 
 		private Assembly OnAssemblyResolve(object sender, ResolveEventArgs args)
 		{
-			// nonexistent resource assemblies
-			if (args.Name.StartsWith("Microsoft.BizTalk.ExplorerOM.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-			if (args.Name.StartsWith("Microsoft.BizTalk.Pipeline.Components.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-			if (args.Name.StartsWith("Microsoft.ServiceModel.Channels.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-
-			// nonexistent xml serializers
-			if (Regex.IsMatch(args.Name, @"(Microsoft|Be\.Stateless)\..+\.XmlSerializers, Version=")) return null;
-
-			var assemblyName = new AssemblyName(args.Name);
-
-			var resolutionPath = SystemProbingFolderPaths.Concat(UserProbingFolderPaths)
-				.Select(
-					path => {
-						var probedPath = Path.Combine(path, assemblyName.Name + ".dll");
-						_logAppender?.Invoke($"   Probing '{probedPath}'.");
-						return probedPath;
-					})
-				.FirstOrDefault(File.Exists);
-			if (resolutionPath != null)
+			// see https://docs.microsoft.com/en-us/troubleshoot/dotnet/framework/serialization-onassemblyresolve-event-causes-recursion, workaround 2
+			if (_assembliesBeingResolved.Contains(args.Name)) return null;
+			lock (_assembliesBeingResolved)
 			{
-				_logAppender?.Invoke($"   Resolved assembly '{resolutionPath}'.");
-				return Assembly.LoadFile(resolutionPath);
+				if (_assembliesBeingResolved.Contains(args.Name)) return null;
+				try
+				{
+					_assembliesBeingResolved.Add(args.Name);
+
+					// nonexistent resource assemblies
+					if (args.Name.StartsWith("Microsoft.BizTalk.ExplorerOM.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
+					if (args.Name.StartsWith("Microsoft.BizTalk.Pipeline.Components.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
+					if (args.Name.StartsWith("Microsoft.ServiceModel.Channels.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
+
+					// nonexistent xml serializers
+					if (Regex.IsMatch(args.Name, @"(Microsoft|Be\.Stateless)\..+\.XmlSerializers, Version=")) return null;
+
+					var assemblyName = new AssemblyName(args.Name);
+					var resolutionPath = SystemProbingFolderPaths.Concat(UserProbingFolderPaths)
+						.Select(
+							path => {
+								var probedPath = Path.Combine(path, assemblyName.Name + ".dll");
+								_logAppender?.Invoke($"   Probing '{probedPath}'.");
+								return probedPath;
+							})
+						.FirstOrDefault(File.Exists);
+					if (resolutionPath != null)
+					{
+						_logAppender?.Invoke($"   Resolved assembly '{resolutionPath}'.");
+						// see https://stackoverflow.com/a/1477899/1789441
+						return Assembly.LoadFrom(resolutionPath);
+					}
+					_logAppender?.Invoke($"   Could not resolve assembly '{args.Name}'.");
+					return null;
+				}
+				finally
+				{
+					_assembliesBeingResolved.Remove(args.Name);
+				}
 			}
-			_logAppender?.Invoke($"   Could not resolve assembly '{args.Name}'.");
-			return null;
 		}
 
+		private static readonly List<string> _assembliesBeingResolved = new List<string>();
 		private Action<string> _logAppender;
 	}
 }

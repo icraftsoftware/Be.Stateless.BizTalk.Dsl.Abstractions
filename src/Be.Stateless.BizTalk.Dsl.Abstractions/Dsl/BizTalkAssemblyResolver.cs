@@ -22,13 +22,13 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
+using Be.Stateless.BizTalk.Dsl.Extensions;
 using Microsoft.Win32;
 
 namespace Be.Stateless.BizTalk.Dsl
 {
 	[SuppressMessage("ReSharper", "UnusedType.Global")]
-	public class BizTalkAssemblyResolver
+	public sealed class BizTalkAssemblyResolver : IDisposable
 	{
 		static BizTalkAssemblyResolver()
 		{
@@ -36,102 +36,101 @@ namespace Be.Stateless.BizTalk.Dsl
 			using (var baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry32))
 			using (var btsKey = baseKey.OpenSubKey(subKey))
 			{
-				if (btsKey == null)
-				{
-					SystemProbingFolderPaths = Array.Empty<string>();
-				}
-				else
-				{
-					var installPath = (string) btsKey.GetValue("InstallPath");
-					SystemProbingFolderPaths = new[] {
+				_systemProbingFolderPaths = btsKey?.GetValue("InstallPath") is string installPath
+					? new[] {
 						installPath,
 						Path.Combine(installPath, @"Developer Tools"),
 						Path.Combine(installPath, @"SDK\Utilities\PipelineTools")
-					};
-				}
+					}
+					: Array.Empty<string>();
 			}
-			Instance = new BizTalkAssemblyResolver();
 		}
-
-		internal static BizTalkAssemblyResolver Instance { get; }
-
-		private static string[] SystemProbingFolderPaths { get; }
 
 		[SuppressMessage("ReSharper", "UnusedMember.Global")]
-		public static void Register(Action<string> logAppender, params string[] probingFolderPaths)
-		{
-			Instance._logAppender = logAppender;
-			if (!SystemProbingFolderPaths.Any()) logAppender?.Invoke("System probing folder paths to BizTalk Developer Tools and Pipeline Tools could not be found.");
-			AddProbingFolderPaths(probingFolderPaths ?? Array.Empty<string>());
-			AppDomain.CurrentDomain.AssemblyResolve += Instance.OnAssemblyResolve;
-		}
+		public BizTalkAssemblyResolver(Action<string> logAppender, params string[] probingFolderPaths) : this(logAppender, false, probingFolderPaths) { }
 
+		/// <summary>
+		/// 
+		/// </summary>
+		/// <remarks>
+		/// <para>
+		/// Beginning with the .NET Framework 4, the <see cref="ResolveEventHandler"/> event is raised for all assemblies,
+		/// including resource assemblies. In earlier versions, the event was not raised for resource assemblies. If the
+		/// operating system is localized, the handler might be called multiple times: once for each culture in the fallback
+		/// chain.
+		/// </para>
+		/// </remarks>
+		/// <param name="logAppender">
+		/// </param>
+		/// <param name="skipResourceAssemblies">
+		/// Whether to skip resolution for resource assemblies.
+		/// </param>
+		/// <param name="probingFolderPaths">
+		/// </param>
+		/// <seealso href="https://docs.microsoft.com/en-us/dotnet/api/system.appdomain.assemblyresolve">AppDomain.AssemblyResolve Event</seealso>
 		[SuppressMessage("ReSharper", "MemberCanBePrivate.Global")]
-		public static void AddProbingFolderPaths(params string[] probingFolderPaths)
+		public BizTalkAssemblyResolver(Action<string> logAppender, bool skipResourceAssemblies, params string[] probingFolderPaths)
 		{
-			Instance.UserProbingFolderPaths = probingFolderPaths?.Where(p => !string.IsNullOrWhiteSpace(p))
-					.SelectMany(jp => jp.Split(';').Where(p => !string.IsNullOrWhiteSpace(p)))
+			_logAppender = logAppender;
+			_skipResourceAssemblies = skipResourceAssemblies;
+			_userProbingFolderPaths = probingFolderPaths?
+					.Where(p => !string.IsNullOrWhiteSpace(p))
 					.Distinct()
 					.ToArray()
-				?? Enumerable.Empty<string>();
+				?? Array.Empty<string>();
+			_assembliesPendingResolution = new HashSet<string>();
+			AppDomain.CurrentDomain.AssemblyResolve += OnAssemblyResolve;
+
+			if (!_systemProbingFolderPaths.Any()) logAppender?.Invoke("BizTalk system folder paths could not be found.");
 		}
 
-		[SuppressMessage("ReSharper", "UnusedMember.Global")]
-		public static void Unregister()
+		#region IDisposable Members
+
+		public void Dispose()
 		{
-			AppDomain.CurrentDomain.AssemblyResolve -= Instance.OnAssemblyResolve;
-			Instance._logAppender = null;
+			AppDomain.CurrentDomain.AssemblyResolve -= OnAssemblyResolve;
 		}
 
-		private BizTalkAssemblyResolver() { }
-
-		internal IEnumerable<string> UserProbingFolderPaths { get; private set; }
+		#endregion
 
 		private Assembly OnAssemblyResolve(object sender, ResolveEventArgs args)
 		{
 			// see https://docs.microsoft.com/en-us/troubleshoot/dotnet/framework/serialization-onassemblyresolve-event-causes-recursion, workaround 2
-			if (_assembliesBeingResolved.Contains(args.Name)) return null;
-			lock (_assembliesBeingResolved)
+			if (_assembliesPendingResolution.Contains(args.Name)) return null;
+			var assemblyName = new AssemblyName(args.Name);
+			if (_skipResourceAssemblies && assemblyName.IsResourceAssembly()) return null;
+			if (assemblyName.IsNonExistentMicrosoftAssembly() || assemblyName.IsNonExistentStatelessAssembly()) return null;
+			try
 			{
-				if (_assembliesBeingResolved.Contains(args.Name)) return null;
-				try
+				_assembliesPendingResolution.Add(args.Name);
+				if (args.RequestingAssembly != null) _logAppender?.Invoke($"   Resolving dependencies for assembly: '{args.RequestingAssembly.FullName}'.");
+				var resolvedPath = _systemProbingFolderPaths.Concat(_userProbingFolderPaths)
+					.Select(
+						path => {
+							var probingPath = Path.Combine(path, assemblyName.Name + ".dll");
+							_logAppender?.Invoke($"   Probing '{probingPath}'.");
+							return probingPath;
+						})
+					.FirstOrDefault(File.Exists);
+				if (resolvedPath != null)
 				{
-					_assembliesBeingResolved.Add(args.Name);
-
-					// nonexistent resource assemblies
-					if (args.Name.StartsWith("Microsoft.BizTalk.ExplorerOM.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-					if (args.Name.StartsWith("Microsoft.BizTalk.Pipeline.Components.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-					if (args.Name.StartsWith("Microsoft.ServiceModel.Channels.resources, Version=", StringComparison.OrdinalIgnoreCase)) return null;
-
-					// nonexistent xml serializers
-					if (Regex.IsMatch(args.Name, @"(Microsoft|Be\.Stateless)\..+\.XmlSerializers, Version=")) return null;
-
-					var assemblyName = new AssemblyName(args.Name);
-					var resolutionPath = SystemProbingFolderPaths.Concat(UserProbingFolderPaths)
-						.Select(
-							path => {
-								var probedPath = Path.Combine(path, assemblyName.Name + ".dll");
-								_logAppender?.Invoke($"   Probing '{probedPath}'.");
-								return probedPath;
-							})
-						.FirstOrDefault(File.Exists);
-					if (resolutionPath != null)
-					{
-						_logAppender?.Invoke($"   Resolved assembly '{resolutionPath}'.");
-						// see https://stackoverflow.com/a/1477899/1789441
-						return Assembly.LoadFrom(resolutionPath);
-					}
-					_logAppender?.Invoke($"   Could not resolve assembly '{args.Name}'.");
-					return null;
+					_logAppender?.Invoke($"   Resolved assembly '{resolvedPath}'.");
+					// see https://stackoverflow.com/a/1477899/1789441
+					return Assembly.LoadFrom(resolvedPath);
 				}
-				finally
-				{
-					_assembliesBeingResolved.Remove(args.Name);
-				}
+				_logAppender?.Invoke($"   Could not resolve assembly '{args.Name}'.");
+				return null;
+			}
+			finally
+			{
+				_assembliesPendingResolution.Remove(args.Name);
 			}
 		}
 
-		private static readonly List<string> _assembliesBeingResolved = new List<string>();
-		private Action<string> _logAppender;
+		private static readonly string[] _systemProbingFolderPaths;
+		private readonly HashSet<string> _assembliesPendingResolution;
+		private readonly Action<string> _logAppender;
+		private readonly bool _skipResourceAssemblies;
+		private readonly string[] _userProbingFolderPaths;
 	}
 }

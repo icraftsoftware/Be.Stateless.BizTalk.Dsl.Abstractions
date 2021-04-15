@@ -116,7 +116,8 @@ namespace Be.Stateless.BizTalk.Dsl
 				{
 					_logAppender?.Invoke($"   Resolved assembly '{resolvedPath}'.");
 					// see https://stackoverflow.com/a/1477899/1789441
-					return Assembly.LoadFile(resolvedPath);
+					// see https://stackoverflow.com/a/41858160/1789441
+					return AppDomain.CurrentDomain.Load(Assembly.LoadFrom(resolvedPath).GetName());
 				}
 				_logAppender?.Invoke($"   Could not resolve assembly '{args.Name}'.");
 				return null;
